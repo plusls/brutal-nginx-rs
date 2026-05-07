@@ -1,0 +1,19 @@
+{
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "version": "2.5.7",
+      "resolved": "ghcr.io/devcontainers/features/common-utils@sha256:dbf431d6b42d55cde50fa1df75c7f7c3999a90cde6d73f7a7071174b3c3d0cc4",
+      "integrity": "sha256:dbf431d6b42d55cde50fa1df75c7f7c3999a90cde6d73f7a7071174b3c3d0cc4"
+    },
+    "ghcr.io/rocker-org/devcontainer-features/apt-packages:1": {
+      "version": "1.0.2",
+      "resolved": "ghcr.io/rocker-org/devcontainer-features/apt-packages@sha256:87a4d7750a596a5db034ba8508782f31aebdc2ffe955c66aaecb33d9de2ecdae",
+      "integrity": "sha256:87a4d7750a596a5db034ba8508782f31aebdc2ffe955c66aaecb33d9de2ecdae"
+    },
+    "ghcr.io/stu-bell/devcontainer-features/node:0": {
+      "version": "0.5.2",
+      "resolved": "ghcr.io/stu-bell/devcontainer-features/node@sha256:044479bdbf55bf9191f6bea70306818c7669259f6962add77af2ff7d93658541",
+      "integrity": "sha256:044479bdbf55bf9191f6bea70306818c7669259f6962add77af2ff7d93658541"
+    }
+  }
+}

@@ -1,0 +1,14 @@
+.cargo
+.dockerignore
+.git
+.github
+README.md
+build
+
+.vscode/**
+
+**/target
+target
+
+.cache/
+.nginx/

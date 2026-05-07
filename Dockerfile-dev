@@ -1,0 +1,21 @@
+ARG DEBIAN_RELEASE=trixie
+FROM rust:slim-${DEBIAN_RELEASE} AS dev
+WORKDIR /project
+RUN --mount=type=cache,target=/var/cache/apt <<EOF
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get -qq update
+    apt-get -qq install --yes --no-install-recommends --no-install-suggests \
+        libclang-dev \
+        libpcre2-dev \
+        libssl-dev \
+        zlib1g-dev \
+        pkg-config \
+        git \
+        grep \
+        gawk \
+        gnupg2 \
+        sed \
+        make
+    git config --global --add safe.directory /project
+EOF
