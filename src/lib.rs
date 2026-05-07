@@ -1,26 +1,32 @@
-use std::{alloc::Layout, ptr::NonNull, str::FromStr};
+use std::{
+    alloc::Layout,
+    ffi::{c_char, c_void},
+    ptr::{self, NonNull},
+    str::FromStr,
+};
 
 use nginx_sys::{
-    __socket_type_SOCK_STREAM, AF_UNIX, IPPROTO_TCP, NGX_LOG_ERR, TCP_CONGESTION, setsockopt,
+    __socket_type_SOCK_STREAM, AF_UNIX, IPPROTO_TCP, NGX_CONF_TAKE1, NGX_LOG_EMERG, NGX_LOG_ERR,
+    NGX_STREAM_SRV_CONF, TCP_CONGESTION, ngx_command_t, ngx_conf_t, ngx_int_t, ngx_module_t,
+    ngx_str_t, ngx_uint_t, setsockopt,
 };
 use ngx::{
     allocator::Allocator,
-    core::{Pool, Status},
-    ffi::{NGX_LOG_EMERG, ngx_command_t, ngx_conf_t, ngx_str_t},
+    core::{NGX_CONF_ERROR, NGX_CONF_OK, Pool, Status},
     http::{Merge, MergeConfigError},
-    ngx_conf_log_error, ngx_log_debug, ngx_log_error,
+    ngx_conf_log_error, ngx_log_debug, ngx_log_error, ngx_string,
 };
 
 use crate::value::{
     ComplexValueTrait, NginxBool, NginxComplexValue, NginxHandlerCtxTrait, NginxValue,
 };
+#[cfg(feature = "export-modules")]
+use crate::{brutal_http::ngx_http_brutal_module, brutal_stream::ngx_stream_brutal_module};
 
 pub mod value;
 
 #[cfg(ngx_feature = "stream")]
 pub mod stream;
-
-pub struct Module;
 
 #[derive(Debug)]
 pub struct ModuleConfig<CVT> {
@@ -264,3 +270,333 @@ pub fn extract_nginx_value<T: FromStr, CVT: ComplexValueTrait>(
         }
     }
 }
+
+struct Module;
+
+mod brutal_stream {
+    use super::*;
+    use crate::{
+        Module,
+        stream::{
+            self, Session, StreamModule as _, StreamModuleServerConf, StreamPhase,
+            StreamSessionHandler,
+        },
+    };
+    use nginx_sys::{
+        NGX_STREAM_MODULE, NGX_STREAM_SRV_CONF_OFFSET, ngx_stream_complex_value_t,
+        ngx_stream_module_t,
+    };
+
+    impl stream::StreamModule for Module {
+        fn module() -> &'static ngx_module_t {
+            unsafe { &*::core::ptr::addr_of!(ngx_stream_brutal_module) }
+        }
+
+        unsafe extern "C" fn postconfiguration(cf: *mut ngx_conf_t) -> ngx_int_t {
+            // SAFETY: this function is called with non-NULL cf always
+            let cf = unsafe { &mut *cf };
+            stream::add_phase_handler::<BrutalSessionHandler>(cf)
+                .map_or(Status::NGX_ERROR, |_| Status::NGX_OK)
+                .into()
+        }
+    }
+
+    unsafe impl StreamModuleServerConf for Module {
+        type ServerConf = ModuleConfig<ngx_stream_complex_value_t>;
+    }
+
+    pub struct BrutalSessionHandler;
+    impl StreamSessionHandler for BrutalSessionHandler {
+        const PHASE: StreamPhase = StreamPhase::PostAccept;
+        type Output = Status;
+
+        fn handler(session: &mut Session) -> Self::Output {
+            let brutual_params = Module::server_conf_mut(session)
+                .expect("module config is none")
+                .get_brutal_param(session);
+            brutal_handler(session, brutual_params)
+        }
+    }
+
+    static mut NGX_STREAM_BRUTAL_COMMANDS: [ngx_command_t; 4] = [
+        ngx_command_t {
+            name: ngx_string!("brutal"),
+            type_: (NGX_STREAM_SRV_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+            set: Some(ngx_stream_brutal_set),
+            conf: NGX_STREAM_SRV_CONF_OFFSET,
+            offset: 0,
+            post: ptr::null_mut(),
+        },
+        ngx_command_t {
+            name: ngx_string!("brutal_rate"),
+            type_: (NGX_STREAM_SRV_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+            set: Some(ngx_stream_brutal_rate_commands_set),
+            conf: NGX_STREAM_SRV_CONF_OFFSET,
+            offset: 0,
+            post: ptr::null_mut(),
+        },
+        ngx_command_t {
+            name: ngx_string!("brutal_cwnd_gain"),
+            type_: (NGX_STREAM_SRV_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+            set: Some(ngx_stream_brutal_cwnd_gain_commands_set),
+            conf: NGX_STREAM_SRV_CONF_OFFSET,
+            offset: 0,
+            post: ptr::null_mut(),
+        },
+        ngx_command_t::empty(),
+    ];
+
+    static NGX_STREAM_BRUTAL_MODULE_CTX: ngx_stream_module_t = ngx_stream_module_t {
+        preconfiguration: Some(Module::preconfiguration),
+        postconfiguration: Some(Module::postconfiguration),
+        create_main_conf: None,
+        init_main_conf: None,
+        create_srv_conf: Some(Module::create_srv_conf),
+        merge_srv_conf: Some(Module::merge_srv_conf),
+    };
+
+    #[used]
+    #[allow(non_upper_case_globals)]
+    #[cfg_attr(not(feature = "export-modules"), unsafe(no_mangle))]
+    pub static mut ngx_stream_brutal_module: ngx_module_t = ngx_module_t {
+        ctx: &raw const NGX_STREAM_BRUTAL_MODULE_CTX as _,
+        commands: unsafe { &raw mut NGX_STREAM_BRUTAL_COMMANDS[0] },
+        type_: NGX_STREAM_MODULE as _,
+        ..ngx_module_t::default()
+    };
+
+    extern "C" fn ngx_stream_brutal_set(
+        cf: *mut ngx_conf_t,
+        cmd: *mut ngx_command_t,
+        conf: *mut c_void,
+    ) -> *mut c_char {
+        let conf = unsafe { &mut *(conf as *mut ModuleConfig<ngx_stream_complex_value_t>) };
+        if let Some(v) = extract_nginx_value::<NginxBool, ngx_stream_complex_value_t>(
+            NonNull::new(cf).expect("cf not null"),
+            NonNull::new(cmd).expect("cmd not null"),
+        ) {
+            conf.enable = Some(v);
+            NGX_CONF_OK
+        } else {
+            NGX_CONF_ERROR
+        }
+    }
+
+    extern "C" fn ngx_stream_brutal_rate_commands_set(
+        cf: *mut ngx_conf_t,
+        cmd: *mut ngx_command_t,
+        conf: *mut c_void,
+    ) -> *mut c_char {
+        let conf = unsafe { &mut *(conf as *mut ModuleConfig<ngx_stream_complex_value_t>) };
+        if let Some(v) = extract_nginx_value::<u64, ngx_stream_complex_value_t>(
+            NonNull::new(cf).expect("cf not null"),
+            NonNull::new(cmd).expect("cmd not null"),
+        ) {
+            conf.rate = Some(v);
+            NGX_CONF_OK
+        } else {
+            NGX_CONF_ERROR
+        }
+    }
+
+    extern "C" fn ngx_stream_brutal_cwnd_gain_commands_set(
+        cf: *mut ngx_conf_t,
+        cmd: *mut ngx_command_t,
+        conf: *mut c_void,
+    ) -> *mut c_char {
+        let conf = unsafe { &mut *(conf as *mut ModuleConfig<ngx_stream_complex_value_t>) };
+        if let Some(v) = extract_nginx_value::<u32, ngx_stream_complex_value_t>(
+            NonNull::new(cf).expect("cf not null"),
+            NonNull::new(cmd).expect("cmd not null"),
+        ) {
+            conf.cwnd_gain = Some(v);
+            NGX_CONF_OK
+        } else {
+            NGX_CONF_ERROR
+        }
+    }
+}
+
+mod brutal_http {
+    use super::*;
+    use crate::Module;
+    use nginx_sys::{
+        NGX_HTTP_MODULE, NGX_HTTP_SRV_CONF, NGX_HTTP_SRV_CONF_OFFSET, ngx_http_complex_value_t,
+        ngx_http_module_t,
+    };
+    use ngx::http::{
+        self, HttpModule as _, HttpModuleLocationConf, HttpPhase, HttpRequestHandler, Request,
+    };
+    impl http::HttpModule for Module {
+        fn module() -> &'static ngx_module_t {
+            unsafe { &*::core::ptr::addr_of!(ngx_http_brutal_module) }
+        }
+
+        unsafe extern "C" fn postconfiguration(cf: *mut ngx_conf_t) -> ngx_int_t {
+            // SAFETY: this function is called with non-NULL cf always
+            let cf = unsafe { &mut *cf };
+            http::add_phase_handler::<BrutalSessionHandler>(cf)
+                .map_or(Status::NGX_ERROR, |_| Status::NGX_OK)
+                .into()
+        }
+    }
+
+    unsafe impl HttpModuleLocationConf for Module {
+        type LocationConf = ModuleConfig<ngx_http_complex_value_t>;
+    }
+
+    pub struct BrutalSessionHandler;
+    impl HttpRequestHandler for BrutalSessionHandler {
+        const PHASE: HttpPhase = HttpPhase::Access;
+        type Output = Status;
+
+        fn handler(request: &mut Request) -> Self::Output {
+            let brutual_params = Module::location_conf_mut(request)
+                .expect("module config is none")
+                .get_brutal_param(request);
+            brutal_handler(request, brutual_params)
+        }
+    }
+
+    static mut NGX_HTTP_BRUTAL_COMMANDS: [ngx_command_t; 4] = [
+        ngx_command_t {
+            name: ngx_string!("brutal"),
+            type_: (NGX_HTTP_SRV_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+            set: Some(ngx_http_brutal_set),
+            conf: NGX_HTTP_SRV_CONF_OFFSET,
+            offset: 0,
+            post: ptr::null_mut(),
+        },
+        ngx_command_t {
+            name: ngx_string!("brutal_rate"),
+            type_: (NGX_HTTP_SRV_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+            set: Some(ngx_http_brutal_rate_commands_set),
+            conf: NGX_HTTP_SRV_CONF_OFFSET,
+            offset: 0,
+            post: ptr::null_mut(),
+        },
+        ngx_command_t {
+            name: ngx_string!("brutal_cwnd_gain"),
+            type_: (NGX_HTTP_SRV_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+            set: Some(ngx_http_brutal_cwnd_gain_commands_set),
+            conf: NGX_HTTP_SRV_CONF_OFFSET,
+            offset: 0,
+            post: ptr::null_mut(),
+        },
+        ngx_command_t::empty(),
+    ];
+
+    static NGX_HTTP_BRUTAL_MODULE_CTX: ngx_http_module_t = ngx_http_module_t {
+        preconfiguration: Some(Module::preconfiguration),
+        postconfiguration: Some(Module::postconfiguration),
+        create_main_conf: None,
+        init_main_conf: None,
+        create_srv_conf: None,
+        merge_srv_conf: None,
+        create_loc_conf: Some(Module::create_loc_conf),
+        merge_loc_conf: Some(Module::merge_loc_conf),
+    };
+
+    #[used]
+    #[allow(non_upper_case_globals)]
+    #[cfg_attr(not(feature = "export-modules"), unsafe(no_mangle))]
+    pub static mut ngx_http_brutal_module: ngx_module_t = ngx_module_t {
+        ctx: &raw const NGX_HTTP_BRUTAL_MODULE_CTX as _,
+        commands: unsafe { &raw mut NGX_HTTP_BRUTAL_COMMANDS[0] },
+        type_: NGX_HTTP_MODULE as _,
+        ..ngx_module_t::default()
+    };
+
+    extern "C" fn ngx_http_brutal_set(
+        cf: *mut ngx_conf_t,
+        cmd: *mut ngx_command_t,
+        conf: *mut c_void,
+    ) -> *mut c_char {
+        let conf = unsafe { &mut *(conf as *mut ModuleConfig<ngx_http_complex_value_t>) };
+        if let Some(v) = extract_nginx_value::<NginxBool, ngx_http_complex_value_t>(
+            NonNull::new(cf).expect("cf not null"),
+            NonNull::new(cmd).expect("cmd not null"),
+        ) {
+            conf.enable = Some(v);
+            NGX_CONF_OK
+        } else {
+            NGX_CONF_ERROR
+        }
+    }
+
+    extern "C" fn ngx_http_brutal_rate_commands_set(
+        cf: *mut ngx_conf_t,
+        cmd: *mut ngx_command_t,
+        conf: *mut c_void,
+    ) -> *mut c_char {
+        let conf = unsafe { &mut *(conf as *mut ModuleConfig<ngx_http_complex_value_t>) };
+        if let Some(v) = extract_nginx_value::<u64, ngx_http_complex_value_t>(
+            NonNull::new(cf).expect("cf not null"),
+            NonNull::new(cmd).expect("cmd not null"),
+        ) {
+            conf.rate = Some(v);
+            NGX_CONF_OK
+        } else {
+            NGX_CONF_ERROR
+        }
+    }
+
+    extern "C" fn ngx_http_brutal_cwnd_gain_commands_set(
+        cf: *mut ngx_conf_t,
+        cmd: *mut ngx_command_t,
+        conf: *mut c_void,
+    ) -> *mut c_char {
+        let conf = unsafe { &mut *(conf as *mut ModuleConfig<ngx_http_complex_value_t>) };
+        if let Some(v) = extract_nginx_value::<u32, ngx_http_complex_value_t>(
+            NonNull::new(cf).expect("cf not null"),
+            NonNull::new(cmd).expect("cmd not null"),
+        ) {
+            conf.cwnd_gain = Some(v);
+            NGX_CONF_OK
+        } else {
+            NGX_CONF_ERROR
+        }
+    }
+}
+
+macro_rules! ngx_modules {
+    ($( $mod:ident ),+) => {
+        #[unsafe(no_mangle)]
+        #[allow(non_upper_case_globals)]
+        pub static mut ngx_modules: [*const ngx::ffi::ngx_module_t; count!($( $mod, )+) + 1] = [
+            $( &raw const $mod as *const ngx::ffi::ngx_module_t, )+
+            ::core::ptr::null()
+        ];
+
+        #[unsafe(no_mangle)]
+        #[allow(non_upper_case_globals)]
+        pub static mut ngx_module_names: [*const ::core::ffi::c_char; count!($( $mod, )+) + 1] = [
+            $( concat!(stringify!($mod), "\0").as_ptr() as *const ::core::ffi::c_char, )+
+            ::core::ptr::null()
+        ];
+
+        #[unsafe(no_mangle)]
+        #[allow(non_upper_case_globals)]
+        pub static mut ngx_module_order: [*const ::core::ffi::c_char; 1] = [
+            ::core::ptr::null()
+        ];
+    };
+}
+
+macro_rules! replace_expr {
+    ($_t:tt $sub:expr) => {
+        $sub
+    };
+}
+
+macro_rules! count {
+    ($($x:ident),+ $(,)?) => {
+        0usize $(+ replace_expr!($x 1usize))+
+    };
+}
+
+// nginx 仓库的宏有bug, 因此自己改了一下
+// Generate the `ngx_modules` table with exported modules.
+// This feature is required to build a 'cdylib' dynamic module outside of the NGINX buildsystem.
+#[cfg(feature = "export-modules")]
+ngx_modules!(ngx_stream_brutal_module, ngx_http_brutal_module);

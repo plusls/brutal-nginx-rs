@@ -6,6 +6,8 @@
 
 ## 样例配置
 
+### stream
+
 只为 www.speedtest.cn 启用该算法
 
 ```nginx
@@ -31,6 +33,10 @@ server {
 }
 ```
 
+### http
+
+同上, 可以写在 http 配置块中, 最低可以写到 location 配置中
+
 ## 运行前置条件
 
 运行环境需要支持 brutal TCP 拥塞控制算法，并且内核或相关模块需要实现自定义 sockopt `TCP_BRUTAL_PARAMS = 23301`。可以先确认系统已暴露 brutal 算法，例如检查 `/proc/sys/net/ipv4/tcp_available_congestion_control` 中是否包含 `brutal`。
@@ -47,6 +53,17 @@ server {
 docker buildx build --build-arg NGX_VERSION=1.29.8 -f Dockerfile-build --target export --output type=local,dest=build .
 ```
 
+## 产物
+
+ngx_brutal_rs_module.so
+
+其中包含如下 nginx 模块
+
++ ngx_stream_brutal_module
++ ngx_http_brutal_module
+
+既可以作用在 stream 配置中, 又可以作用在 http 配置中
+
 ## 开发
 
 ```
@@ -60,5 +77,5 @@ docker run --rm -it --user 1000 -v .:/work  docker.io/library/ngx-rs-dev bash
 
 ## 参考
 
-https://github.com/nginx/ngx-rust
-https://github.com/sduoduo233/brutal-nginx
++ https://github.com/nginx/ngx-rust
++ https://github.com/sduoduo233/brutal-nginx
