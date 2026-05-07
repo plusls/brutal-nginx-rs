@@ -21,8 +21,14 @@ default = [
 export-modules = []
 linux = []
 
-[lib]
+[[example]]
 name = "ngx_stream_brutal_rs_module"
+path = "src/ngx_stream_brutal_rs_module.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "ngx_http_brutal_rs_module"
+path = "src/ngx_http_brutal_rs_module.rs"
 crate-type = ["cdylib"]
 
 [profile.release]
