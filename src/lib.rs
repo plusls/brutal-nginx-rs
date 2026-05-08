@@ -27,23 +27,25 @@ pub mod value;
 pub mod stream;
 
 #[derive(Debug)]
-pub struct ModuleConfig<CVT> {
+pub struct ModuleConfig<CVT, T> {
     pub enable: Option<NginxValue<NginxBool, CVT>>,
     pub rate: Option<NginxValue<u64, CVT>>,
     pub cwnd_gain: Option<NginxValue<u32, CVT>>,
+    pub extra: Option<T>,
 }
 
-impl<CVT> Default for ModuleConfig<CVT> {
+impl<CVT, T> Default for ModuleConfig<CVT, T> {
     fn default() -> Self {
         Self {
             enable: Default::default(),
             rate: Default::default(),
             cwnd_gain: Default::default(),
+            extra: Default::default(),
         }
     }
 }
 
-impl<CVT> ModuleConfig<CVT> {
+impl<CVT, T> ModuleConfig<CVT, T> {
     pub fn get_brutal_param<CTX: NginxHandlerCtxTrait<NginxComplexValueType = CVT>>(
         &mut self,
         ctx: &mut CTX,
@@ -98,8 +100,8 @@ pub struct BrutalParams {
     cwnd_gain: u32,
 }
 
-impl<CVT: Clone> Merge for ModuleConfig<CVT> {
-    fn merge(&mut self, prev: &ModuleConfig<CVT>) -> Result<(), MergeConfigError> {
+impl<CVT: Clone, T> Merge for ModuleConfig<CVT, T> {
+    fn merge(&mut self, prev: &ModuleConfig<CVT, T>) -> Result<(), MergeConfigError> {
         if self.enable.is_none() {
             self.enable = prev.enable.clone();
         }
@@ -279,9 +281,9 @@ mod brutal_stream {
                 .into()
         }
     }
-
+    type ContentHandler = unsafe extern "C" fn(*mut nginx_sys::ngx_stream_session_s);
     unsafe impl StreamModuleServerConf for Module {
-        type ServerConf = ModuleConfig<ngx_stream_complex_value_t>;
+        type ServerConf = ModuleConfig<ngx_stream_complex_value_t, ContentHandler>;
     }
 
     pub struct BrutalSessionHandler;
@@ -305,16 +307,30 @@ mod brutal_stream {
                     }
                 }
             }
-            if let Some(old_content_handler) = &mut cscf.handler
+            if let Some(old_content_handler_ref) = &mut cscf.handler
                 && !std::ptr::fn_addr_eq(
-                    *old_content_handler,
+                    *old_content_handler_ref,
                     raw_stream_content_brutal_handler
                         as unsafe extern "C" fn(*mut ngx_stream_session_t),
                 )
             {
+                let old_content_handler = *old_content_handler_ref;
+                // let addr = unsafe { session.as_ref().ctx.add(Module::module().ctx_index) } as u64;
+                // eprintln!(
+                //     "wtf store ptr to {addr:#x} old_handler: {:#x}, raw handler: {:#x}, session: {:#x}, ctx: {:#x}",
+                //     old_content_handler as usize,
+                //     raw_stream_content_brutal_handler as *const () as usize,
+                //     session.as_ref() as *const _ as usize,
+                //     session.as_ref().ctx as usize,
+                // );
                 // 存储旧的函数指针
-                session.set_module_ctx(*old_content_handler as *const () as _, Module::module());
-                *old_content_handler = raw_stream_content_brutal_handler;
+                // 存储到配置文件中是因为原本该指针就位于配置文件中
+                // 配置文件的生命周期和 session 不同, 多个 session 可能对应一个配置文件, 因此会有并发访问的问题
+                // 但是 stream 模块的语义可以保证, 一个配置块最多只有一个 content_handler, 因此这么实现大概不会有问题?
+                // 在这替换还有个原因是, 配置解析时无法保证解析顺序, 因此 content_handler 不一定已经设置好了
+                // 必须先存进 conf 再设置 old_content_handler_ref, 因为 old_content_handler_ref 可能会被并发访问
+                conf.extra = Some(old_content_handler);
+                *old_content_handler_ref = raw_stream_content_brutal_handler;
             }
             Status::NGX_DECLINED
         }
@@ -369,24 +385,23 @@ mod brutal_stream {
 
     unsafe extern "C" fn raw_stream_content_brutal_handler(s: *mut ngx_stream_session_t) {
         let session = unsafe { Session::from_ngx_stream_session(s) };
-        let brutual_params = Module::server_conf_mut(session)
-            .expect("module config is none")
-            .get_brutal_param(session);
+        let conf = Module::server_conf_mut(session).expect("module config is none");
+        let brutual_params = conf.get_brutal_param(session);
         brutal_handler(session, brutual_params);
+
+        // let addr = unsafe { session.as_ref().ctx.add(Module::module().ctx_index) } as u64;
+        // eprintln!(
+        //     "try read ptr from {addr:#x}, session: {:#x}, ctx: {:#x}, bt: {:?},",
+        //     s as usize,
+        //     session.as_ref().ctx as usize,
+        //     std::backtrace::Backtrace::force_capture()
+        // );
 
         // 因为偷懒直接存的函数指针, 现有 api 无法直接拿出来
         // 因此直接 transmute
-        let old_handler = unsafe {
-            std::mem::transmute::<
-                *mut c_void,
-                Option<unsafe extern "C" fn(*mut nginx_sys::ngx_stream_session_s)>,
-            >(*session.as_ref().ctx.add(Module::module().ctx_index))
-        }
-        .expect("old handler always not null");
-        // 设置完成后还原初始 handler
-        let cscf = NgxStreamCoreModule::server_conf_mut(session).expect("stream core srv conf");
-        cscf.handler = Some(old_handler);
-        session.set_module_ctx(null_mut(), Module::module());
+        let old_handler = conf.extra.expect("old handler always not null");
+
+        // eprintln!("old_handler in raw: {:#x}", old_handler as usize);
         unsafe { old_handler(s) }
     }
 
@@ -395,7 +410,9 @@ mod brutal_stream {
         cmd: *mut ngx_command_t,
         conf: *mut c_void,
     ) -> *mut c_char {
-        let conf = unsafe { &mut *(conf as *mut ModuleConfig<ngx_stream_complex_value_t>) };
+        let conf = unsafe {
+            &mut *(conf as *mut ModuleConfig<ngx_stream_complex_value_t, ContentHandler>)
+        };
         if let Some(v) = extract_nginx_value::<NginxBool, ngx_stream_complex_value_t>(
             NonNull::new(cf).expect("cf not null"),
             NonNull::new(cmd).expect("cmd not null"),
@@ -412,7 +429,9 @@ mod brutal_stream {
         cmd: *mut ngx_command_t,
         conf: *mut c_void,
     ) -> *mut c_char {
-        let conf = unsafe { &mut *(conf as *mut ModuleConfig<ngx_stream_complex_value_t>) };
+        let conf = unsafe {
+            &mut *(conf as *mut ModuleConfig<ngx_stream_complex_value_t, ContentHandler>)
+        };
         if let Some(v) = extract_nginx_value::<u64, ngx_stream_complex_value_t>(
             NonNull::new(cf).expect("cf not null"),
             NonNull::new(cmd).expect("cmd not null"),
@@ -429,7 +448,9 @@ mod brutal_stream {
         cmd: *mut ngx_command_t,
         conf: *mut c_void,
     ) -> *mut c_char {
-        let conf = unsafe { &mut *(conf as *mut ModuleConfig<ngx_stream_complex_value_t>) };
+        let conf = unsafe {
+            &mut *(conf as *mut ModuleConfig<ngx_stream_complex_value_t, ContentHandler>)
+        };
         if let Some(v) = extract_nginx_value::<u32, ngx_stream_complex_value_t>(
             NonNull::new(cf).expect("cf not null"),
             NonNull::new(cmd).expect("cmd not null"),
@@ -467,7 +488,7 @@ mod brutal_http {
     }
 
     unsafe impl HttpModuleLocationConf for Module {
-        type LocationConf = ModuleConfig<ngx_http_complex_value_t>;
+        type LocationConf = ModuleConfig<ngx_http_complex_value_t, ()>;
     }
 
     pub struct BrutalHandler;
@@ -537,7 +558,7 @@ mod brutal_http {
         cmd: *mut ngx_command_t,
         conf: *mut c_void,
     ) -> *mut c_char {
-        let conf = unsafe { &mut *(conf as *mut ModuleConfig<ngx_http_complex_value_t>) };
+        let conf = unsafe { &mut *(conf as *mut ModuleConfig<ngx_http_complex_value_t, ()>) };
         if let Some(v) = extract_nginx_value::<NginxBool, ngx_http_complex_value_t>(
             NonNull::new(cf).expect("cf not null"),
             NonNull::new(cmd).expect("cmd not null"),
@@ -554,7 +575,7 @@ mod brutal_http {
         cmd: *mut ngx_command_t,
         conf: *mut c_void,
     ) -> *mut c_char {
-        let conf = unsafe { &mut *(conf as *mut ModuleConfig<ngx_http_complex_value_t>) };
+        let conf = unsafe { &mut *(conf as *mut ModuleConfig<ngx_http_complex_value_t, ()>) };
         if let Some(v) = extract_nginx_value::<u64, ngx_http_complex_value_t>(
             NonNull::new(cf).expect("cf not null"),
             NonNull::new(cmd).expect("cmd not null"),
@@ -571,7 +592,7 @@ mod brutal_http {
         cmd: *mut ngx_command_t,
         conf: *mut c_void,
     ) -> *mut c_char {
-        let conf = unsafe { &mut *(conf as *mut ModuleConfig<ngx_http_complex_value_t>) };
+        let conf = unsafe { &mut *(conf as *mut ModuleConfig<ngx_http_complex_value_t, ()>) };
         if let Some(v) = extract_nginx_value::<u32, ngx_http_complex_value_t>(
             NonNull::new(cf).expect("cf not null"),
             NonNull::new(cmd).expect("cmd not null"),
