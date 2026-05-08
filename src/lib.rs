@@ -196,7 +196,7 @@ pub fn extract_nginx_value<T: FromStr, CVT: ComplexValueTrait>(
 
     let mut cv: CVT = unsafe { std::mem::zeroed::<CVT>() };
     let mut ccv: CVT::NginxCompileComplexValueType = unsafe { std::mem::zeroed() };
-    CVT::init_compile_complex_value(&mut ccv, cf, &mut args[1] as _, &mut cv);
+    CVT::init_compile_complex_value(&mut ccv, cf, &args[1], &mut cv);
 
     if let Err(err) = CVT::compile(&mut ccv) {
         ngx_conf_log_error!(
