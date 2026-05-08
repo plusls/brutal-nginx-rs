@@ -151,7 +151,7 @@ impl NginxHandlerCtxTrait for Session {
     }
     fn connection(&self) -> &ngx_connection_t {
         let conn = self.connection();
-        unsafe { conn.as_mut() }.expect("connection always not null")
+        unsafe { conn.as_ref() }.expect("connection always not null")
     }
 }
 
@@ -167,7 +167,7 @@ impl NginxHandlerCtxTrait for Request {
     }
     fn connection(&self) -> &ngx_connection_t {
         let conn = self.connection();
-        unsafe { conn.as_mut() }.expect("connection always not null")
+        unsafe { conn.as_ref() }.expect("connection always not null")
     }
 }
 
