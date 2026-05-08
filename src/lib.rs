@@ -1,5 +1,4 @@
 use std::{
-    alloc::Layout,
     ffi::{c_char, c_void},
     ptr::{self, NonNull},
     str::FromStr,
@@ -11,7 +10,6 @@ use nginx_sys::{
     ngx_str_t, ngx_uint_t, setsockopt,
 };
 use ngx::{
-    allocator::Allocator,
     core::{NGX_CONF_ERROR, NGX_CONF_OK, Pool, Status},
     http::{Merge, MergeConfigError},
     ngx_conf_log_error, ngx_log_debug, ngx_log_error, ngx_string,
@@ -197,7 +195,6 @@ pub fn extract_nginx_value<T: FromStr, CVT: ComplexValueTrait>(
     };
 
     let pool = unsafe { Pool::from_ngx_pool(cf.pool) };
-    let layout = Layout::new::<CVT>();
     let cv = pool.allocate(unsafe { std::mem::zeroed::<CVT>() });
     let mut cv = match NonNull::new(cv) {
         Some(cv) => cv,
@@ -227,16 +224,10 @@ pub fn extract_nginx_value<T: FromStr, CVT: ComplexValueTrait>(
     match CVT::static_value::<T>(unsafe { cv.as_ref() }) {
         Ok(Some(static_value)) => {
             // 静态值
-            unsafe {
-                pool.deallocate(cv.cast::<u8>(), layout);
-            }
             Some(NginxValue::Static(static_value))
         }
         Err(err) => {
             // 静态值解析失败
-            unsafe {
-                pool.deallocate(cv.cast::<u8>(), layout);
-            }
             ngx_conf_log_error!(NGX_LOG_EMERG, cf, "invalid {cmd_name}, err: {err}",);
             None
         }
