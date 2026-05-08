@@ -37,8 +37,9 @@ RUN --mount=type=cache,id=target,target=target \
     --mount=type=cache,id=cache,target=.cache \
     --mount=type=cache,id=cargo,target=/usr/local/cargo/registry \
     mkdir -p /out && \
-    cargo build --release && \
-    mv /project/target/release/libngx_brutal_rs_module.so /out/ngx_brutal_rs_module.so
+    cargo build --release && cargo build && \
+    mv /project/target/release/libngx_brutal_rs_module.so /out/ngx_brutal_rs_module.so && \
+    mv /project/target/debug/libngx_brutal_rs_module.so /out/debug_ngx_brutal_rs_module.so
 
 
 FROM scratch AS export
