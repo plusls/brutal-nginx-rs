@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NGX_VERSION: "1.29.8"
+
+jobs:
+  docker-build:
+    name: Build nginx module with Docker Buildx
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build module export
+        run: |
+          docker buildx build \
+            --cache-from type=gha,scope=brutal-nginx-rs-${NGX_VERSION} \
+            --cache-to type=gha,mode=max,scope=brutal-nginx-rs-${NGX_VERSION} \
+            --build-arg NGX_VERSION="${NGX_VERSION}" \
+            -f Dockerfile-build \
+            --target export \
+            --output type=local,dest=build \
+            .
+
+      - name: Verify exported modules
+        run: |
+          test -s build/ngx_brutal_rs_module.so
+          test -s build/debug_ngx_brutal_rs_module.so
+          file build/ngx_brutal_rs_module.so
+          file build/debug_ngx_brutal_rs_module.so
+
+      - name: Upload module artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nginx-modules-${{ env.NGX_VERSION }}
+          path: |
+            build/ngx_brutal_rs_module.so
+            build/debug_ngx_brutal_rs_module.so
+          if-no-files-found: error
+          retention-days: 7
