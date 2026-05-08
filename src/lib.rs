@@ -422,7 +422,7 @@ mod brutal_http {
     use super::*;
     use crate::Module;
     use nginx_sys::{
-        NGX_HTTP_MODULE, NGX_HTTP_SRV_CONF, NGX_HTTP_SRV_CONF_OFFSET, ngx_http_complex_value_t,
+        NGX_HTTP_LOC_CONF, NGX_HTTP_LOC_CONF_OFFSET, NGX_HTTP_MODULE, ngx_http_complex_value_t,
         ngx_http_module_t,
     };
     use ngx::http::{
@@ -462,25 +462,25 @@ mod brutal_http {
     static mut NGX_HTTP_BRUTAL_COMMANDS: [ngx_command_t; 4] = [
         ngx_command_t {
             name: ngx_string!("brutal"),
-            type_: (NGX_HTTP_SRV_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+            type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
             set: Some(ngx_http_brutal_set),
-            conf: NGX_HTTP_SRV_CONF_OFFSET,
+            conf: NGX_HTTP_LOC_CONF_OFFSET,
             offset: 0,
             post: ptr::null_mut(),
         },
         ngx_command_t {
             name: ngx_string!("brutal_rate"),
-            type_: (NGX_HTTP_SRV_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+            type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
             set: Some(ngx_http_brutal_rate_commands_set),
-            conf: NGX_HTTP_SRV_CONF_OFFSET,
+            conf: NGX_HTTP_LOC_CONF_OFFSET,
             offset: 0,
             post: ptr::null_mut(),
         },
         ngx_command_t {
             name: ngx_string!("brutal_cwnd_gain"),
-            type_: (NGX_HTTP_SRV_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+            type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
             set: Some(ngx_http_brutal_cwnd_gain_commands_set),
-            conf: NGX_HTTP_SRV_CONF_OFFSET,
+            conf: NGX_HTTP_LOC_CONF_OFFSET,
             offset: 0,
             post: ptr::null_mut(),
         },
