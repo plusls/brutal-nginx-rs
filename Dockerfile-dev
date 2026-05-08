@@ -18,4 +18,5 @@ RUN --mount=type=cache,target=/var/cache/apt <<EOF
         sed \
         make
     git config --global --add safe.directory /project
+    rustup component add rustfmt clippy
 EOF

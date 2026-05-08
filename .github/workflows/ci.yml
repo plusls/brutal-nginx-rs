@@ -15,6 +15,35 @@ env:
   NGX_VERSION: "1.29.8"
 
 jobs:
+  rust-check:
+    name: Check Rust code
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build check image
+        run: |
+          docker build \
+            -f Dockerfile-dev \
+            -t brutal-nginx-rs-dev \
+            .
+
+      - name: Run Rust checks
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e CARGO_HOME=/tmp/cargo \
+            -e HOME=/tmp \
+            -v "${PWD}:/project" \
+            -w /project \
+            brutal-nginx-rs-dev \
+            sh -euxc 'cargo check --locked && cargo fmt --all -- --check && cargo clippy --locked --all-targets --all-features -- -D warnings'
+
   docker-build:
     name: Build nginx module with Docker Buildx
     runs-on: ubuntu-24.04

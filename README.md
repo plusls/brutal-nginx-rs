@@ -112,6 +112,22 @@ docker buildx build --build-arg NGX_VERSION=1.29.8 -f Dockerfile-build --target 
 
 如果需要额外 nginx 模块、额外 configure 参数，或需要匹配非官方镜像的 nginx binary，请自行拉取对应 nginx 源码，并使用与目标 nginx binary 一致的 configure 参数配合编译。
 
+## Release 下载
+
+GitHub Release 会提供预构建压缩包，文件名包含构建目标 nginx 版本，例如：
+
+```
+brutal-nginx-rs-nginx-1.29.8-v0.1.0.tar.gz
+```
+
+压缩包内容：
+
++ `ngx_brutal_rs_module.so`：release 构建，推荐常规部署使用
++ `debug_ngx_brutal_rs_module.so`：debug 构建，用于排查问题
++ `SHA256SUMS`：上述两个 `.so` 的 SHA-256 校验值
+
+Release 产物只保证匹配构建时的 nginx ABI；当前预构建包面向 `nginx:1.29.8-trixie` 这一类官方镜像 ABI。使用前建议按下方 ABI 校验确认；如果目标 nginx 不是官方镜像，或编译时使用了不同 configure 参数，建议自行构建。
+
 ## ABI 校验
 
 可以通过模块中的 ABI 标记确认模块和 nginx binary 是否匹配：
@@ -130,9 +146,12 @@ strings /usr/sbin/nginx | grep -E '^[0-9]+,[0-9]+,[0-9]+,[01]{20,}$'
 
 ## 产物
 
-ngx_brutal_rs_module.so
+本地构建会在 `build/` 下生成两个模块文件：
 
-其中包含如下 nginx 模块
++ `ngx_brutal_rs_module.so`：release 构建，推荐常规部署使用
++ `debug_ngx_brutal_rs_module.so`：debug 构建，用于排查问题
+
+两个 `.so` 都包含如下 nginx 模块：
 
 + ngx_stream_brutal_module
 + ngx_http_brutal_module
