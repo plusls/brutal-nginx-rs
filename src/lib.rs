@@ -259,8 +259,8 @@ mod brutal_stream {
         },
     };
     use nginx_sys::{
-        NGX_STREAM_MODULE, NGX_STREAM_SRV_CONF_OFFSET, ngx_stream_complex_value_t,
-        ngx_stream_module_t, ngx_stream_session_t,
+        NGX_STREAM_MAIN_CONF, NGX_STREAM_MODULE, NGX_STREAM_SRV_CONF_OFFSET,
+        ngx_stream_complex_value_t, ngx_stream_module_t, ngx_stream_session_t,
     };
 
     // ssl_preload 的解析位于 Preread 的最后, 因此需要在 Preread 后执行
@@ -339,7 +339,7 @@ mod brutal_stream {
     static mut NGX_STREAM_BRUTAL_COMMANDS: [ngx_command_t; 4] = [
         ngx_command_t {
             name: ngx_string!("brutal"),
-            type_: (NGX_STREAM_SRV_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+            type_: (NGX_STREAM_SRV_CONF | NGX_STREAM_MAIN_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
             set: Some(ngx_stream_brutal_set),
             conf: NGX_STREAM_SRV_CONF_OFFSET,
             offset: 0,
@@ -467,8 +467,8 @@ mod brutal_http {
     use super::*;
     use crate::Module;
     use nginx_sys::{
-        NGX_HTTP_LOC_CONF, NGX_HTTP_LOC_CONF_OFFSET, NGX_HTTP_MODULE, ngx_http_complex_value_t,
-        ngx_http_module_t,
+        NGX_HTTP_LOC_CONF, NGX_HTTP_LOC_CONF_OFFSET, NGX_HTTP_MAIN_CONF, NGX_HTTP_MODULE,
+        NGX_HTTP_SRV_CONF, ngx_http_complex_value_t, ngx_http_module_t,
     };
     use ngx::http::{
         self, HttpModule as _, HttpModuleLocationConf, HttpPhase, HttpRequestHandler, Request,
@@ -507,7 +507,8 @@ mod brutal_http {
     static mut NGX_HTTP_BRUTAL_COMMANDS: [ngx_command_t; 4] = [
         ngx_command_t {
             name: ngx_string!("brutal"),
-            type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+            type_: (NGX_HTTP_LOC_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_MAIN_CONF | NGX_CONF_TAKE1)
+                as ngx_uint_t,
             set: Some(ngx_http_brutal_set),
             conf: NGX_HTTP_LOC_CONF_OFFSET,
             offset: 0,
@@ -515,7 +516,8 @@ mod brutal_http {
         },
         ngx_command_t {
             name: ngx_string!("brutal_rate"),
-            type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+            type_: (NGX_HTTP_LOC_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_MAIN_CONF | NGX_CONF_TAKE1)
+                as ngx_uint_t,
             set: Some(ngx_http_brutal_rate_commands_set),
             conf: NGX_HTTP_LOC_CONF_OFFSET,
             offset: 0,
@@ -523,7 +525,8 @@ mod brutal_http {
         },
         ngx_command_t {
             name: ngx_string!("brutal_cwnd_gain"),
-            type_: (NGX_HTTP_LOC_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+            type_: (NGX_HTTP_LOC_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_MAIN_CONF | NGX_CONF_TAKE1)
+                as ngx_uint_t,
             set: Some(ngx_http_brutal_cwnd_gain_commands_set),
             conf: NGX_HTTP_LOC_CONF_OFFSET,
             offset: 0,
