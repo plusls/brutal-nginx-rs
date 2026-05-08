@@ -164,9 +164,9 @@ impl Session {
     }
 
     /// Get the value of a [complex value].
-    pub fn get_complex_value(&mut self, cv: &mut ngx_stream_complex_value_t) -> Option<&NgxStr> {
+    pub fn get_complex_value(&mut self, cv: &ngx_stream_complex_value_t) -> Option<&NgxStr> {
         let r = (self as *mut Session).cast();
-        let val = cv as *mut ngx_stream_complex_value_t;
+        let val = cv as *const _ as *mut ngx_stream_complex_value_t;
         // SAFETY: `ngx_stream_complex_value` does not mutate `r` or `val` and guarentees that
         // a valid Nginx string is stored in `value` if it successfully returns.
         unsafe {

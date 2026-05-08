@@ -6,13 +6,13 @@ use std::{
 
 use nginx_sys::{
     __socket_type_SOCK_STREAM, AF_UNIX, IPPROTO_TCP, NGX_CONF_TAKE1, NGX_LOG_EMERG, NGX_LOG_ERR,
-    NGX_STREAM_SRV_CONF, TCP_CONGESTION, ngx_command_t, ngx_conf_t, ngx_int_t, ngx_module_t,
-    ngx_str_t, ngx_uint_t, setsockopt,
+    NGX_LOG_INFO, NGX_STREAM_SRV_CONF, TCP_CONGESTION, ngx_command_t, ngx_conf_t, ngx_int_t,
+    ngx_module_t, ngx_str_t, ngx_uint_t, setsockopt,
 };
 use ngx::{
     core::{NGX_CONF_ERROR, NGX_CONF_OK, Status},
     http::{Merge, MergeConfigError},
-    ngx_conf_log_error, ngx_log_debug, ngx_log_error, ngx_string,
+    ngx_conf_log_error, ngx_log_error, ngx_string,
 };
 
 use crate::value::{
@@ -117,7 +117,6 @@ pub fn brutal_handler<T: NginxHandlerCtxTrait>(
     ctx: &mut T,
     brutal_param: Option<BrutalParams>,
 ) -> Status {
-    let enable = brutal_param.is_some();
     let connection = ctx.connection();
     let should_apply_brutal = connection.type_ as u32 == __socket_type_SOCK_STREAM
         && unsafe {
@@ -127,15 +126,12 @@ pub fn brutal_handler<T: NginxHandlerCtxTrait>(
                 .and_then(|listening| listening.sockaddr.as_ref())
                 .is_some_and(|sockaddr| sockaddr.sa_family as u32 != AF_UNIX)
         };
-
+    let log = ctx.log();
     if let Some(brutal_param) = brutal_param
         && should_apply_brutal
     {
+        ngx_log_error!(NGX_LOG_INFO, log, "brutal module enabled.");
         let fd = connection.fd;
-
-        let log = ctx.log();
-        ngx_log_debug!(mask: <T as NginxHandlerCtxTrait>::DEBUG_MASK, log, "brutal module enabled: {enable}");
-
         let algo = b"brutal\0";
 
         let set_sock_opt_ret = unsafe {
@@ -174,10 +170,8 @@ pub fn brutal_handler<T: NginxHandlerCtxTrait>(
             );
             return Status::NGX_DECLINED;
         }
-        Status::NGX_OK
-    } else {
-        Status::NGX_DECLINED
     }
+    Status::NGX_DECLINED
 }
 
 pub fn extract_nginx_value<T: FromStr, CVT: ComplexValueTrait>(
@@ -252,19 +246,26 @@ pub fn extract_nginx_value<T: FromStr, CVT: ComplexValueTrait>(
 struct Module;
 
 mod brutal_stream {
+    use std::ptr::null_mut;
+
     use super::*;
     use crate::{
         Module,
         stream::{
-            self, Session, StreamModule as _, StreamModuleServerConf, StreamPhase,
-            StreamSessionHandler,
+            self, NgxStreamCoreModule, Session, StreamModule as _, StreamModuleServerConf,
+            StreamPhase, StreamSessionHandler,
         },
     };
     use nginx_sys::{
         NGX_STREAM_MODULE, NGX_STREAM_SRV_CONF_OFFSET, ngx_stream_complex_value_t,
-        ngx_stream_module_t,
+        ngx_stream_module_t, ngx_stream_session_t,
     };
 
+    // ssl_preload 的解析位于 Preread 的最后, 因此需要在 Preread 后执行
+    // 但是 Preread 后就是 Content 阶段, 只能替换该阶段的 handler, 做一个 wrapper
+    // 坑点:
+    // 1. preload 的变量是 cached 的, 若是在变量初始化完成前去读取, 会导致其永远未初始化
+    // 2. preload 模块执行结束后会强制跳到下一阶段, 因此没法在 preread 阶段处理 handler
     impl stream::StreamModule for Module {
         fn module() -> &'static ngx_module_t {
             unsafe { &*::core::ptr::addr_of!(ngx_stream_brutal_module) }
@@ -285,14 +286,37 @@ mod brutal_stream {
 
     pub struct BrutalSessionHandler;
     impl StreamSessionHandler for BrutalSessionHandler {
-        const PHASE: StreamPhase = StreamPhase::PostAccept;
+        const PHASE: StreamPhase = StreamPhase::Preread;
         type Output = Status;
 
+        // 判断是否存在 content handler, 如果有的话保存旧的 handler, 替换为自己的
         fn handler(session: &mut Session) -> Self::Output {
-            let brutual_params = Module::server_conf_mut(session)
-                .expect("module config is none")
-                .get_brutal_param(session);
-            brutal_handler(session, brutual_params)
+            // 不能在这解析 brutual_params, 在这里解析不到 ssl preload 的变量
+            let conf = Module::server_conf_mut(session).expect("module config is none");
+            session.set_module_ctx(null_mut(), Module::module());
+
+            let cscf = NgxStreamCoreModule::server_conf_mut(session).expect("stream core srv conf");
+            if let (Some(enable), Some(_)) = (&conf.enable, &conf.rate) {
+                match enable {
+                    // 对于需要解析的情况留到 content 阶段解析
+                    NginxValue::Complex(_) | NginxValue::Static(NginxBool(true)) => {}
+                    NginxValue::Static(NginxBool(false)) => {
+                        return Status::NGX_DECLINED;
+                    }
+                }
+            }
+            if let Some(old_content_handler) = &mut cscf.handler
+                && !std::ptr::fn_addr_eq(
+                    *old_content_handler,
+                    raw_stream_content_brutal_handler
+                        as unsafe extern "C" fn(*mut ngx_stream_session_t),
+                )
+            {
+                // 存储旧的函数指针
+                session.set_module_ctx(*old_content_handler as *const () as _, Module::module());
+                *old_content_handler = raw_stream_content_brutal_handler;
+            }
+            Status::NGX_DECLINED
         }
     }
 
@@ -342,6 +366,29 @@ mod brutal_stream {
         type_: NGX_STREAM_MODULE as _,
         ..ngx_module_t::default()
     };
+
+    unsafe extern "C" fn raw_stream_content_brutal_handler(s: *mut ngx_stream_session_t) {
+        let session = unsafe { Session::from_ngx_stream_session(s) };
+        let brutual_params = Module::server_conf_mut(session)
+            .expect("module config is none")
+            .get_brutal_param(session);
+        brutal_handler(session, brutual_params);
+
+        // 因为偷懒直接存的函数指针, 现有 api 无法直接拿出来
+        // 因此直接 transmute
+        let old_handler = unsafe {
+            std::mem::transmute::<
+                *mut c_void,
+                Option<unsafe extern "C" fn(*mut nginx_sys::ngx_stream_session_s)>,
+            >(*session.as_ref().ctx.add(Module::module().ctx_index))
+        }
+        .expect("old handler always not null");
+        // 设置完成后还原初始 handler
+        let cscf = NgxStreamCoreModule::server_conf_mut(session).expect("stream core srv conf");
+        cscf.handler = Some(old_handler);
+        session.set_module_ctx(null_mut(), Module::module());
+        unsafe { old_handler(s) }
+    }
 
     extern "C" fn ngx_stream_brutal_set(
         cf: *mut ngx_conf_t,
@@ -413,7 +460,7 @@ mod brutal_http {
         unsafe extern "C" fn postconfiguration(cf: *mut ngx_conf_t) -> ngx_int_t {
             // SAFETY: this function is called with non-NULL cf always
             let cf = unsafe { &mut *cf };
-            http::add_phase_handler::<BrutalSessionHandler>(cf)
+            http::add_phase_handler::<BrutalHandler>(cf)
                 .map_or(Status::NGX_ERROR, |_| Status::NGX_OK)
                 .into()
         }
@@ -423,8 +470,8 @@ mod brutal_http {
         type LocationConf = ModuleConfig<ngx_http_complex_value_t>;
     }
 
-    pub struct BrutalSessionHandler;
-    impl HttpRequestHandler for BrutalSessionHandler {
+    pub struct BrutalHandler;
+    impl HttpRequestHandler for BrutalHandler {
         const PHASE: HttpPhase = HttpPhase::Access;
         type Output = Status;
 

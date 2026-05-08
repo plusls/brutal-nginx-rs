@@ -6,7 +6,7 @@ use nginx_sys::{
     ngx_stream_compile_complex_value, ngx_stream_compile_complex_value_t,
     ngx_stream_complex_value_t,
 };
-use ngx::{core::NgxStr, http::Request, log::DebugMask};
+use ngx::{core::NgxStr, http::Request};
 
 use crate::stream::Session;
 
@@ -45,8 +45,8 @@ impl ComplexValueTrait for ngx_stream_complex_value_t {
         value: &ngx_str_t,
         complex_value: &mut Self,
     ) {
-        compile_complex_value.cf = cf as * const _ as *mut _;
-        compile_complex_value.value = value as * const _ as *mut _;
+        compile_complex_value.cf = cf as *const _ as *mut _;
+        compile_complex_value.value = value as *const _ as *mut _;
         compile_complex_value.complex_value = complex_value;
     }
 
@@ -79,8 +79,8 @@ impl ComplexValueTrait for ngx_http_complex_value_t {
         value: &ngx_str_t,
         complex_value: &mut Self,
     ) {
-        compile_complex_value.cf = cf as * const _ as *mut _;
-        compile_complex_value.value = value as * const _ as *mut _;
+        compile_complex_value.cf = cf as *const _ as *mut _;
+        compile_complex_value.value = value as *const _ as *mut _;
         compile_complex_value.complex_value = complex_value;
     }
     fn compile(
@@ -112,12 +112,11 @@ fn parse_nginx_str<T: FromStr>(s: &NgxStr) -> Result<T, String> {
 
 pub trait NginxHandlerCtxTrait {
     type NginxComplexValueType;
-    const DEBUG_MASK: DebugMask;
     fn get_complex_value<T: FromStr>(
         &mut self,
         cv: &mut NginxComplexValue<Self::NginxComplexValueType>,
     ) -> Result<T, String> {
-        if let Some(vs) = self.get_nginx_complex_value(&mut cv.cv) {
+        if let Some(vs) = self.get_nginx_complex_value(&cv.cv) {
             parse_nginx_str(vs).map_err(|err| {
                 format!(
                     "Cannot parse `{}` at file: {}, line: {}, err: {err}",
@@ -131,16 +130,15 @@ pub trait NginxHandlerCtxTrait {
             ))
         }
     }
-    fn get_nginx_complex_value(&mut self, cv: &mut Self::NginxComplexValueType) -> Option<&NgxStr>;
+    fn get_nginx_complex_value(&mut self, cv: &Self::NginxComplexValueType) -> Option<&NgxStr>;
     fn log(&self) -> *mut ngx_log_t;
     fn connection(&self) -> &ngx_connection_t;
 }
 
 impl NginxHandlerCtxTrait for Session {
     type NginxComplexValueType = ngx_stream_complex_value_t;
-    const DEBUG_MASK: DebugMask = DebugMask::Stream;
 
-    fn get_nginx_complex_value(&mut self, cv: &mut Self::NginxComplexValueType) -> Option<&NgxStr> {
+    fn get_nginx_complex_value(&mut self, cv: &Self::NginxComplexValueType) -> Option<&NgxStr> {
         Session::get_complex_value(self, cv)
     }
     fn log(&self) -> *mut ngx_log_t {
@@ -154,9 +152,8 @@ impl NginxHandlerCtxTrait for Session {
 
 impl NginxHandlerCtxTrait for Request {
     type NginxComplexValueType = ngx_http_complex_value_t;
-    const DEBUG_MASK: DebugMask = DebugMask::Http;
 
-    fn get_nginx_complex_value(&mut self, cv: &mut Self::NginxComplexValueType) -> Option<&NgxStr> {
+    fn get_nginx_complex_value(&mut self, cv: &Self::NginxComplexValueType) -> Option<&NgxStr> {
         Request::get_complex_value(self, cv)
     }
     fn log(&self) -> *mut ngx_log_t {
@@ -197,7 +194,7 @@ impl<T: Clone + FromStr, CVT> NginxValue<T, CVT> {
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-pub struct NginxBool(bool);
+pub struct NginxBool(pub bool);
 
 impl FromStr for NginxBool {
     type Err = ParseBoolError;
