@@ -347,7 +347,7 @@ mod brutal_stream {
         },
         ngx_command_t {
             name: ngx_string!("brutal_rate"),
-            type_: (NGX_STREAM_SRV_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+            type_: (NGX_STREAM_SRV_CONF | NGX_STREAM_MAIN_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
             set: Some(ngx_stream_brutal_rate_commands_set),
             conf: NGX_STREAM_SRV_CONF_OFFSET,
             offset: 0,
@@ -355,7 +355,7 @@ mod brutal_stream {
         },
         ngx_command_t {
             name: ngx_string!("brutal_cwnd_gain"),
-            type_: (NGX_STREAM_SRV_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
+            type_: (NGX_STREAM_SRV_CONF | NGX_STREAM_MAIN_CONF | NGX_CONF_TAKE1) as ngx_uint_t,
             set: Some(ngx_stream_brutal_cwnd_gain_commands_set),
             conf: NGX_STREAM_SRV_CONF_OFFSET,
             offset: 0,
