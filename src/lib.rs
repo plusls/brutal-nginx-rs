@@ -10,7 +10,7 @@ use nginx_sys::{
     ngx_str_t, ngx_uint_t, setsockopt,
 };
 use ngx::{
-    core::{NGX_CONF_ERROR, NGX_CONF_OK, Pool, Status},
+    core::{NGX_CONF_ERROR, NGX_CONF_OK, Status},
     http::{Merge, MergeConfigError},
     ngx_conf_log_error, ngx_log_debug, ngx_log_error, ngx_string,
 };
@@ -194,23 +194,9 @@ pub fn extract_nginx_value<T: FromStr, CVT: ComplexValueTrait>(
         return None;
     };
 
-    let pool = unsafe { Pool::from_ngx_pool(cf.pool) };
-    let cv = pool.allocate(unsafe { std::mem::zeroed::<CVT>() });
-    let mut cv = match NonNull::new(cv) {
-        Some(cv) => cv,
-        None => {
-            ngx_conf_log_error!(
-                NGX_LOG_EMERG,
-                cf,
-                "failed to allocate ngx complex_value_t for `{cmd_name}`"
-            );
-            return None;
-        }
-    };
-
+    let mut cv: CVT = unsafe { std::mem::zeroed::<CVT>() };
     let mut ccv: CVT::NginxCompileComplexValueType = unsafe { std::mem::zeroed() };
-    CVT::init_compile_complex_value(&mut ccv, cf, &mut args[1] as _, unsafe { cv.as_mut() }
-        as *mut _);
+    CVT::init_compile_complex_value(&mut ccv, cf, &mut args[1] as _, &mut cv);
 
     if let Err(err) = CVT::compile(&mut ccv) {
         ngx_conf_log_error!(
@@ -221,7 +207,7 @@ pub fn extract_nginx_value<T: FromStr, CVT: ComplexValueTrait>(
         return None;
     }
 
-    match CVT::static_value::<T>(unsafe { cv.as_ref() }) {
+    match cv.static_value::<T>() {
         Ok(Some(static_value)) => {
             // 静态值
             Some(NginxValue::Static(static_value))

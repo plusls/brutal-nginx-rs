@@ -1,5 +1,4 @@
 use std::{
-    ptr::NonNull,
     str::{FromStr, ParseBoolError},
 };
 
@@ -21,7 +20,7 @@ pub enum NginxValue<T, CVT> {
 
 #[derive(Debug, Clone)]
 pub struct NginxComplexValue<CVT> {
-    pub cv: NonNull<CVT>,
+    pub cv: CVT,
     pub cmd_name: String,
     pub file_name: String,
     pub line: u32,
@@ -120,7 +119,7 @@ pub trait NginxHandlerCtxTrait {
         &mut self,
         cv: &mut NginxComplexValue<Self::NginxComplexValueType>,
     ) -> Result<T, String> {
-        if let Some(vs) = self.get_nginx_complex_value(unsafe { cv.cv.as_mut() }) {
+        if let Some(vs) = self.get_nginx_complex_value(&mut cv.cv) {
             parse_nginx_str(vs).map_err(|err| {
                 format!(
                     "Cannot parse `{}` at file: {}, line: {}, err: {err}",
