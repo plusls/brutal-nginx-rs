@@ -59,6 +59,7 @@ impl<CVT> ModuleConfig<CVT> {
                 }
                 Err(err) => {
                     ngx_log_error!(NGX_LOG_EMERG, ctx.log(), "{err}",);
+                    return None;
                 }
             }
         } else {
