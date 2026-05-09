@@ -1,8 +1,12 @@
 use std::{
+    collections::HashSet,
     ffi::{c_char, c_void},
     ptr::{self, NonNull},
     str::FromStr,
+    sync::LazyLock,
 };
+
+use parking_lot::Mutex;
 
 use nginx_sys::{
     __socket_type_SOCK_STREAM, AF_UNIX, IPPROTO_TCP, NGX_CONF_TAKE1, NGX_LOG_EMERG, NGX_LOG_ERR,
@@ -115,10 +119,10 @@ impl<CVT: Clone, T> Merge for ModuleConfig<CVT, T> {
     }
 }
 
-pub fn brutal_handler<T: NginxHandlerCtxTrait>(
+fn brutal_handler_with_result<T: NginxHandlerCtxTrait>(
     ctx: &mut T,
     brutal_param: Option<BrutalParams>,
-) -> Status {
+) -> (Status, bool) {
     let connection = ctx.connection();
     let should_apply_brutal = connection.type_ as u32 == __socket_type_SOCK_STREAM
         && unsafe {
@@ -151,7 +155,7 @@ pub fn brutal_handler<T: NginxHandlerCtxTrait>(
                 log,
                 "tcp brutal TCP_CONGESTION 1 error: {set_sock_opt_ret}"
             );
-            return Status::NGX_DECLINED;
+            return (Status::NGX_DECLINED, true);
         }
 
         const TCP_BRUTAL_PARAMS: u32 = 23301;
@@ -170,10 +174,19 @@ pub fn brutal_handler<T: NginxHandlerCtxTrait>(
                 log,
                 "tcp brutal TCP_CONGESTION 2 error: {set_sock_opt_ret}"
             );
-            return Status::NGX_DECLINED;
+            return (Status::NGX_DECLINED, true);
         }
+        return (Status::NGX_DECLINED, true);
     }
-    Status::NGX_DECLINED
+    (Status::NGX_DECLINED, false)
+}
+
+pub fn brutal_handler<T: NginxHandlerCtxTrait>(
+    ctx: &mut T,
+    brutal_param: Option<BrutalParams>,
+) -> Status {
+    let (status, _) = brutal_handler_with_result(ctx, brutal_param);
+    status
 }
 
 pub fn extract_nginx_value<T: FromStr, CVT: ComplexValueTrait>(
@@ -470,8 +483,11 @@ mod brutal_http {
         NGX_HTTP_LOC_CONF, NGX_HTTP_LOC_CONF_OFFSET, NGX_HTTP_MAIN_CONF, NGX_HTTP_MODULE,
         NGX_HTTP_SRV_CONF, ngx_http_complex_value_t, ngx_http_module_t,
     };
-    use ngx::http::{
-        self, HttpModule as _, HttpModuleLocationConf, HttpPhase, HttpRequestHandler, Request,
+    use ngx::{
+        core::Pool,
+        http::{
+            self, HttpModule as _, HttpModuleLocationConf, HttpPhase, HttpRequestHandler, Request,
+        },
     };
     impl http::HttpModule for Module {
         fn module() -> &'static ngx_module_t {
@@ -491,16 +507,69 @@ mod brutal_http {
         type LocationConf = ModuleConfig<ngx_http_complex_value_t, ()>;
     }
 
+    // 被迫使用全局变量
+    // nginx 没有 connection 级别的 ctx, 只能自己构建关联关系
+    static BRUTAL_HTTP_CONNECTIONS: LazyLock<Mutex<HashSet<usize>>> =
+        LazyLock::new(|| Mutex::new(HashSet::new()));
+
+    struct BrutalConnectionCtx {
+        connection: usize,
+    }
+
+    impl BrutalConnectionCtx {
+        fn key(request: &Request) -> usize {
+            request.connection() as usize
+        }
+
+        fn exists(request: &Request) -> bool {
+            BRUTAL_HTTP_CONNECTIONS.lock().contains(&Self::key(request))
+        }
+
+        fn set(request: &Request) -> bool {
+            let connection = Self::key(request);
+            let pool = unsafe {
+                Pool::from_ngx_pool(
+                    request
+                        .connection()
+                        .as_ref()
+                        .expect("conn always not null")
+                        .pool,
+                )
+            };
+            // Pool::allocate 目前先写入再判空，因此无法安全处理 null 返回值。
+            NonNull::new(pool.allocate(BrutalConnectionCtx { connection }))
+                .expect("nginx pool allocation failed");
+
+            BRUTAL_HTTP_CONNECTIONS.lock().insert(connection);
+            true
+        }
+    }
+
+    impl Drop for BrutalConnectionCtx {
+        fn drop(&mut self) {
+            BRUTAL_HTTP_CONNECTIONS.lock().remove(&self.connection);
+        }
+    }
+
     pub struct BrutalHandler;
     impl HttpRequestHandler for BrutalHandler {
         const PHASE: HttpPhase = HttpPhase::Access;
         type Output = Status;
 
         fn handler(request: &mut Request) -> Self::Output {
+            if BrutalConnectionCtx::exists(request) {
+                // 表明已经设置过了, 不应再次设置
+                return Status::NGX_DECLINED;
+            }
+
             let brutual_params = Module::location_conf_mut(request)
                 .expect("module config is none")
                 .get_brutal_param(request);
-            brutal_handler(request, brutual_params)
+            let (status, attempted) = brutal_handler_with_result(request, brutual_params);
+            if attempted && !BrutalConnectionCtx::set(request) {
+                return Status::NGX_ERROR;
+            }
+            status
         }
     }
 

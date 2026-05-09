@@ -80,6 +80,14 @@ http {
 
 运行环境需要支持 brutal TCP 拥塞控制算法，并且内核或相关模块需要实现自定义 sockopt `TCP_BRUTAL_PARAMS = 23301`。可以先确认系统已暴露 brutal 算法，例如检查 `/proc/sys/net/ipv4/tcp_available_congestion_control` 中是否包含 `brutal`。
 
+连接建立后，可以用 `ss` 确认对应 TCP 连接是否已经切换到 brutal：
+
+```bash
+ss -tnpi 'sport = :11443' | grep brutal
+```
+
+这里的 `sport = :11443` 表示只查看本机源端口为 `11443` 的 TCP 连接，通常对应 nginx 对外监听在 `11443` 上的下行连接；如果实际监听端口不同，需要把 `11443` 换成对应端口。`-t` 只显示 TCP，`-n` 不做域名和服务名解析，`-p` 显示进程信息，`-i` 显示 TCP 内部信息。启用成功时，`ss` 输出里会包含 `brutal`，因此 `grep brutal` 能匹配到该连接；如果没有输出，通常表示当前没有匹配端口的已建立连接，或该连接没有成功切换到 brutal。
+
 本模块只对 TCP 连接设置 brutal；Unix socket 或不支持 brutal 的运行环境会跳过或在日志中记录 `setsockopt` 失败，并让连接继续走现有拥塞控制。
 
 ## 详细设计
@@ -89,6 +97,8 @@ http {
 三条指令共用同一套配置结构。解析配置时会先尝试把参数解析为静态值；如果参数里包含 nginx 变量，则保存为 complex value，并在请求或连接处理阶段再求值。
 
 配置合并遵循 nginx 常规的下层覆盖上层规则：下层没有显式配置时继承上层配置，下层显式配置后覆盖对应字段。因此 stream 的 `server` 可以覆盖 `stream`，http 的 `server` 可以覆盖 `http`，`location` 可以覆盖 `server`。
+
+HTTP 连接的 TCP 拥塞控制是连接级状态，不是请求级状态。启用 brutal 后，同一条 keepalive 连接上的后续请求会继续使用已经设置好的拥塞控制；如果首次尝试设置 brutal 失败，这条连接也会被视为已经尝试过，后续请求不会再次重试。因此不建议在同一个 HTTP 监听端口下依赖不同 `location` 对 brutal 做可逆切换。如果需要严格隔离不同策略，建议使用不同监听端口、不同虚拟主机或关闭相关连接复用。
 
 ### stream 阶段
 

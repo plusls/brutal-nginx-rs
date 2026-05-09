@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 nginx-sys = {git="https://github.com/nginx/ngx-rust.git", features=["stream"]}
 ngx =  {git="https://github.com/nginx/ngx-rust.git"}
+parking_lot = "0.12"
 
 [features]
 default = [
