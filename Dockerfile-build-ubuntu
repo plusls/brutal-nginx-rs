@@ -1,0 +1,56 @@
+ARG UBUNTU_RELEASE=20.04
+ARG RUST_VERSION=stable
+
+FROM ubuntu:${UBUNTU_RELEASE} AS build
+
+ENV DEBIAN_FRONTEND=noninteractive
+WORKDIR /project
+
+RUN --mount=type=cache,target=/var/cache/apt \
+    set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        build-essential \
+        clang \
+        libclang-dev \
+        libpcre2-dev \
+        libssl-dev \
+        zlib1g-dev \
+        pkg-config \
+        git \
+        grep \
+        gawk \
+        gnupg2 \
+        sed \
+        make; \
+    rm -rf /var/lib/apt/lists/*
+
+ARG RUST_VERSION
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN set -eux; \
+    curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain ${RUST_VERSION}
+
+COPY . .
+
+RUN --mount=type=cache,id=cargo-focal,target=/root/.cargo/registry \
+    cargo fetch --locked
+
+ARG NGX_VERSION=1.28.3
+ARG NGX_CONFIGURE_ARGS=
+
+RUN --mount=type=cache,id=target-focal,target=target \
+    --mount=type=cache,id=cache-focal,target=.cache \
+    --mount=type=cache,id=cargo-focal,target=/root/.cargo/registry \
+    set -eux; \
+    mkdir -p /out; \
+    cargo build --release; \
+    cargo build; \
+    cp /project/target/release/libngx_brutal_rs_module.so /out/ngx_brutal_rs_module.so; \
+    cp /project/target/debug/libngx_brutal_rs_module.so /out/debug_ngx_brutal_rs_module.so; \
+    ldd /out/ngx_brutal_rs_module.so || true; \
+    objdump -T /out/ngx_brutal_rs_module.so | grep -E 'GLIBC_|GLIBCXX_|CXXABI_' || true
+
+FROM scratch AS export
+COPY --from=build /out /
