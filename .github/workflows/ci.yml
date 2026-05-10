@@ -82,3 +82,42 @@ jobs:
             build/debug_ngx_brutal_rs_module.so
           if-no-files-found: error
           retention-days: 7
+
+  nginx-source-build:
+    name: Validate nginx source build integration
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build through nginx source
+        run: |
+          docker buildx build \
+            --cache-from type=gha,scope=brutal-nginx-rs-nginx-source-${NGX_VERSION} \
+            --cache-to type=gha,mode=max,scope=brutal-nginx-rs-nginx-source-${NGX_VERSION} \
+            --build-arg NGX_VERSION="${NGX_VERSION}" \
+            -f Dockerfile-nginx-build \
+            --target export \
+            --output type=local,dest=build-nginx \
+            .
+
+      - name: Verify nginx source build artifacts
+        run: |
+          test -s build-nginx/nginx
+          test -s build-nginx/modules/ngx_stream_brutal_module.so
+          file build-nginx/nginx
+          file build-nginx/modules/*.so
+
+      - name: Upload nginx source build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nginx-source-build-${{ env.NGX_VERSION }}
+          path: |
+            build-nginx/nginx
+            build-nginx/modules/*.so
+          if-no-files-found: error
+          retention-days: 7

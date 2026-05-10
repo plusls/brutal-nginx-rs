@@ -1,0 +1,68 @@
+ARG NGX_VERSION=1.28.3
+ARG DEBIAN_RELEASE=trixie
+
+FROM rust:slim-${DEBIAN_RELEASE} AS build
+
+ARG NGX_VERSION
+ARG NGX_CONFIGURE_ARGS=
+ENV DEBIAN_FRONTEND=noninteractive
+ENV NGX_CARGO=cargo
+WORKDIR /module
+
+RUN --mount=type=cache,target=/var/cache/apt \
+    set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        build-essential \
+        clang \
+        libclang-dev \
+        libpcre2-dev \
+        libssl-dev \
+        zlib1g-dev \
+        pkg-config \
+        git \
+        grep \
+        gawk \
+        gnupg2 \
+        sed \
+        make \
+        tar; \
+    rm -rf /var/lib/apt/lists/*
+
+COPY . .
+
+RUN --mount=type=cache,id=nginx-module-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=nginx-module-cargo-git,target=/usr/local/cargo/git \
+    cargo fetch --locked
+
+WORKDIR /tmp/nginx
+
+RUN --mount=type=cache,id=nginx-module-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=nginx-module-cargo-git,target=/usr/local/cargo/git \
+    set -eux; \
+    curl -fSL "https://nginx.org/download/nginx-${NGX_VERSION}.tar.gz" \
+        | tar -xz --strip-components=1 -C /tmp/nginx; \
+    ./configure \
+        --prefix=/opt/nginx \
+        --modules-path=/opt/nginx/modules \
+        --with-compat \
+        --with-stream \
+        --with-http_ssl_module \
+        --with-stream_ssl_module \
+        --add-dynamic-module=/module \
+        ${NGX_CONFIGURE_ARGS}; \
+    make -j"$(nproc)"; \
+    make modules; \
+    mkdir -p /out/modules /tmp/test-prefix/logs /tmp/test-prefix/modules; \
+    cp objs/nginx /out/nginx; \
+    cp objs/*.so /out/modules/; \
+    cp objs/*.so /tmp/test-prefix/modules/; \
+    printf 'load_module modules/ngx_stream_brutal_module.so;\nevents {}\nstream { server { listen 127.0.0.1:18081; brutal on; proxy_pass 127.0.0.1:1; } }\n' > /tmp/test-prefix/nginx.conf; \
+    objs/nginx -p /tmp/test-prefix -c /tmp/test-prefix/nginx.conf -t; \
+    objs/nginx -V; \
+    find /out -maxdepth 2 -type f -print
+
+FROM scratch AS export
+COPY --from=build /out /

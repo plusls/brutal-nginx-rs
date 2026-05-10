@@ -1,0 +1,28 @@
+# shellcheck source=auto/rust
+. $ngx_addon_dir/auto/rust
+
+ngx_addon_name=ngx_brutal_rs_module
+
+ngx_rust_target_type=LIB
+ngx_rust_target_name=ngx_brutal_rs_module
+ngx_rust_target_features=
+
+ngx_module_type=MISC
+ngx_module_name=
+
+if [ "$STREAM" != NO ]; then
+    ngx_module_name="$ngx_module_name ngx_stream_brutal_module"
+fi
+
+if [ "$HTTP" = YES ]; then
+    ngx_module_name="$ngx_module_name ngx_http_brutal_module"
+fi
+
+if [ -n "$ngx_module_name" ]; then
+    ngx_module_incs=
+    ngx_module_deps=
+    ngx_module_libs=
+    ngx_module_order=
+
+    ngx_rust_module
+fi
